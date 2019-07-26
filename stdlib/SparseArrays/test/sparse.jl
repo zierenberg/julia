@@ -2708,4 +2708,12 @@ end
     @test adjoint(B)*adjoint(complex.(A)) ≈ adjoint(Array(B)) * adjoint(Array(complex.(A)))
 end
 
+@testset "copy a reshaped sparse array" begin
+    n = 8
+    A = sprand(n, n, 0.2)
+    rA = reshape(A, div(n, 2), 2n)
+    crA = copy(rA)
+    @test Array(reshape(crA, n, n)) == Array(A)
+end
+
 end # module
