@@ -1971,3 +1971,7 @@ end
 # issue #33987
 f33987(args::(Vararg{Any, N} where N); kwargs...) = args
 @test f33987(1,2,3) === (1,2,3)
+
+macro id_for_kwarg(x); x; end
+accepts__kwarg(;z1) = z1
+@test (@id_for_kwarg let z1 = 41; accepts__kwarg(; z1); end) == 41

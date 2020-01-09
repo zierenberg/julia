@@ -4,6 +4,10 @@ Julia v1.5 Release Notes
 New language features
 ---------------------
 
+* Passing an identifier `x` by itself as a keyword argument or named tuple element
+  is equivalent to `x=x`, implicitly using the name of the variable as the keyword
+  or named tuple field name.
+  Similarly, passing an `a.b` expression uses `b` as the keyword or field name ([#29333]).
 
 Language changes
 ----------------

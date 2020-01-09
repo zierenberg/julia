@@ -275,3 +275,14 @@ let nt0 = NamedTuple(), nt1 = (a=33,), nt2 = (a=0, b=:v)
     @test Base.setindex(nt1, "value", :a) == (a="value",)
     @test Base.setindex(nt1, "value", :a) isa NamedTuple{(:a,),<:Tuple{AbstractString}}
 end
+
+# issue #29333, implicit names
+let x = 1, y = 2
+    @test (;y) === (y = 2,)
+    a = (; x, y)
+    @test a === (x=1, y=2)
+    @test (; a.y, a.x) === (y=2, x=1)
+    y = 3
+    @test Meta.lower(Main, Meta.parse("(; a.y, y)")) == Expr(:error, "field name \"y\" repeated in named tuple")
+    @test (; a.y, x) === (y=2, x=1)
+end

@@ -58,6 +58,18 @@ julia> keys = (:a, :b, :c); values = (1, 2, 3);
 julia> (; zip(keys, values)...)
 (a = 1, b = 2, c = 3)
 ```
+
+As in keyword arguments, identifiers and dot expressions imply names:
+
+```jldoctest
+julia> x = 0
+0
+
+julia> t = (; x)
+(x = 0,)
+
+julia> (; t.x)
+(x = 0,)
 """
 Core.NamedTuple
 
