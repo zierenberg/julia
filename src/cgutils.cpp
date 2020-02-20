@@ -2091,13 +2091,7 @@ static void init_bits_value(jl_codectx_t &ctx, Value *newv, Value *v, MDNode *tb
 
 static void init_bits_cgval(jl_codectx_t &ctx, Value *newv, const jl_cgval_t& v, MDNode *tbaa)
 {
-    // newv should already be tagged
-    if (v.ispointer()) {
-        emit_memcpy(ctx, newv, tbaa, v, jl_datatype_size(v.typ), sizeof(void*));
-    }
-    else {
-        init_bits_value(ctx, newv, v.V, tbaa);
-    }
+    emit_unbox(ctx, julia_type_to_llvm(v.typ), v, v.typ, newv, tbaa);
 }
 
 static jl_value_t *static_constant_instance(Constant *constant, jl_value_t *jt)

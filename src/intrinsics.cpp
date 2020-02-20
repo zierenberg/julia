@@ -370,11 +370,13 @@ static Value *emit_unbox(jl_codectx_t &ctx, Type *to, const jl_cgval_t &x, jl_va
 
     unsigned alignment = julia_alignment(jt);
     Type *ptype = to->getPointerTo();
-    if (dest) {
+    if (dest && CountTrackedPointers(to).count == 0) {
         emit_memcpy(ctx, dest, tbaa_dest, p, x.tbaa, jl_datatype_size(jt), alignment, false);
         return NULL;
     }
     else {
+        if (dest)
+            dest = maybe_bitcast(ctx, dest, ptype);
         if (p->getType() != ptype && isa<AllocaInst>(p)) {
             // LLVM's mem2reg can't handle coercion if the load/store type does
             // not match the type of the alloca. As such, it is better to
@@ -388,12 +390,22 @@ static Value *emit_unbox(jl_codectx_t &ctx, Type *to, const jl_cgval_t &x, jl_va
                     (to->isFloatingPointTy() || to->isIntegerTy() || to->isPointerTy()) &&
                     DL.getTypeSizeInBits(AllocType) == DL.getTypeSizeInBits(to)) {
                 Instruction *load = ctx.builder.CreateAlignedLoad(p, alignment);
-                return emit_unboxed_coercion(ctx, to, tbaa_decorate(x.tbaa, load));
+                Value *unboxed = emit_unboxed_coercion(ctx, to, tbaa_decorate(x.tbaa, load));
+                if (dest) {
+                    tbaa_decorate(tbaa_dest, ctx.builder.CreateStore(unboxed, dest));
+                    return NULL;
+                }
+                return unboxed;
             }
         }
         p = maybe_bitcast(ctx, p, ptype);
         Instruction *load = ctx.builder.CreateAlignedLoad(p, alignment);
-        return tbaa_decorate(x.tbaa, load);
+        Value *unboxed = tbaa_decorate(x.tbaa, load);
+        if (dest) {
+            tbaa_decorate(tbaa_dest, ctx.builder.CreateStore(unboxed, dest));
+            return NULL;
+        }
+        return unboxed;
     }
 }
 

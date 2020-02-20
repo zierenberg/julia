@@ -513,12 +513,7 @@ static Value *julia_to_native(
     // pass the address of an alloca'd thing, not a box
     // since those are immutable.
     Value *slot = emit_static_alloca(ctx, to);
-    if (!jvinfo.ispointer()) {
-        tbaa_decorate(jvinfo.tbaa, ctx.builder.CreateStore(emit_unbox(ctx, to, jvinfo, jlto), slot));
-    }
-    else {
-        emit_memcpy(ctx, slot, jvinfo.tbaa, jvinfo, jl_datatype_size(jlto), julia_alignment(jlto));
-    }
+    emit_unbox(ctx, to, jvinfo, jlto, slot, jvinfo.tbaa, julia_alignment(jlto));
     return slot;
 }
 
