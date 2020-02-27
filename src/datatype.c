@@ -87,6 +87,8 @@ jl_datatype_t *jl_new_uninitialized_datatype(void)
 {
     jl_ptls_t ptls = jl_get_ptls_states();
     jl_datatype_t *t = (jl_datatype_t*)jl_gc_alloc(ptls, sizeof(jl_datatype_t), jl_datatype_type);
+    t->uid = 0;
+    t->hash = 0;
     t->hasfreetypevars = 0;
     t->isdispatchtuple = 0;
     t->isbitstype = 0;
@@ -315,7 +317,9 @@ void jl_compute_field_offsets(jl_datatype_t *st)
     const uint64_t max_offset = (((uint64_t)1) << 32) - 1;
     const uint64_t max_size = max_offset >> 1;
 
-    if (st->types == NULL || st->name->wrapper == NULL || (jl_is_namedtuple_type(st) && !jl_is_concrete_type((jl_value_t*)st)))
+    if (st->types == NULL || st->name->wrapper == NULL)
+        return;
+    if ((jl_is_tuple_type(st) || jl_is_namedtuple_type(st)) && !jl_is_concrete_type((jl_value_t*)st))
         return;
     jl_datatype_t *w = (jl_datatype_t*)jl_unwrap_unionall(st->name->wrapper);
     if (w->types == NULL) // we got called too early--we'll be back
@@ -581,16 +585,14 @@ JL_DLLEXPORT jl_datatype_t *jl_new_datatype(
     if (t->name->wrapper == NULL) {
         t->name->wrapper = (jl_value_t*)t;
         jl_gc_wb(t->name, t);
-        int i;
-        int np = jl_svec_len(parameters);
-        for (i=np-1; i >= 0; i--) {
-            t->name->wrapper = jl_new_struct(jl_unionall_type, jl_svecref(parameters,i), t->name->wrapper);
+        int i, np = jl_svec_len(parameters);
+        for (i = np - 1; i >= 0; i--) {
+            t->name->wrapper = jl_new_struct(jl_unionall_type, jl_svecref(parameters, i), t->name->wrapper);
             jl_gc_wb(t->name, t->name->wrapper);
         }
     }
     jl_precompute_memoized_dt(t);
 
-    t->uid = 0;
     if (!abstract) {
         if (jl_svec_len(parameters) == 0)
             t->uid = jl_assign_type_uid();

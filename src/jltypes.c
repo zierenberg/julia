@@ -562,7 +562,7 @@ static intptr_t wrapper_id(jl_value_t *t) JL_NOTSAFEPOINT
 static int is_typekey_ordered(jl_value_t **key, size_t n)
 {
     size_t i;
-    for(i=0; i < n; i++) {
+    for (i = 0; i < n; i++) {
         jl_value_t *k = key[i];
         if (jl_is_typevar(k))
             return 0;
@@ -574,62 +574,54 @@ static int is_typekey_ordered(jl_value_t **key, size_t n)
     return 1;
 }
 
-// ordered comparison of types
-static int typekey_compare(jl_datatype_t *tt, jl_value_t **key, size_t n) JL_NOTSAFEPOINT
+// stable numbering for types
+static unsigned type_hash(jl_datatype_t *val) JL_NOTSAFEPOINT;
+static unsigned typekey_hash(jl_value_t **key, size_t n) JL_NOTSAFEPOINT
 {
     size_t j;
-    if (tt == NULL) return -1;  // place NULLs at end to allow padding for fast growing
-    size_t tnp = jl_nparams(tt);
-    if (n < tnp) return -1;
-    if (n > tnp) return 1;
-    for(j=0; j < n; j++) {
-        jl_value_t *kj = key[j], *tj = jl_svecref(tt->parameters,j);
-        if (tj != kj) {
-            int dtk = jl_is_datatype(kj);
-            if (!jl_is_datatype(tj)) {
-                if (dtk) return 1;
-                uint32_t tid = wrapper_id(tj), kid = wrapper_id(kj);
-                if (kid != tid)
-                    return kid < tid ? -1 : 1;
-                if (tid)
-                    continue;
-                if (jl_egal(tj, kj))
-                    continue;
-                return (jl_object_id(kj) < jl_object_id(tj) ? -1 : 1);
-            }
-            else if (!dtk) {
-                return -1;
-            }
-            assert(dtk && jl_is_datatype(tj));
-            jl_datatype_t *dt = (jl_datatype_t*)tj;
-            jl_datatype_t *dk = (jl_datatype_t*)kj;
-            if (dk->uid != dt->uid) {
-                return dk->uid < dt->uid ? -1 : 1;
-            }
-            else if (dk->uid != 0) {
-                assert(0);
-            }
-            else if (dk->name->hash != dt->name->hash) {
-                return dk->name->hash < dt->name->hash ? -1 : 1;
+    unsigned hash = 3;
+    for (j = 0; j < n; j++) {
+        jl_value_t *kj = key[j];
+        jl_datatype_t *dk = (jl_datatype_t*)(jl_is_unionall(kj) ? jl_unwrap_unionall(kj) : kj);
+        if (!jl_is_datatype(kj)) {
+            hash = bitmix(jl_object_id(kj), hash);
+        }
+        else {
+            if (dk->uid) {
+                hash = bitmix(dk->uid, hash);
             }
             else {
-                int cmp = typekey_compare(dt, jl_svec_data(dk->parameters), jl_nparams(dk));
-                if (cmp != 0)
-                    return cmp;
+                hash = bitmix(dk->name->hash, hash);
+                if (dk->name->wrapper != kj)
+                    hash = bitmix(type_hash(dk), hash);
             }
         }
     }
-    return 0;
+    return hash ? hash : 1;
 }
+
+static unsigned type_hash(jl_datatype_t *val) JL_NOTSAFEPOINT
+{
+    unsigned hash = val->hash;
+    if (__unlikely(hash == 0)) {
+        hash = typekey_hash(jl_svec_data(val->parameters), jl_nparams(val));
+        val->hash = hash;
+    }
+    return hash;
+}
+
 
 static int dt_compare(const void *ap, const void *bp) JL_NOTSAFEPOINT
 {
     jl_datatype_t *a = *(jl_datatype_t**)ap;
     jl_datatype_t *b = *(jl_datatype_t**)bp;
-    if (a == b) return 0;
-    if (b == NULL) return -1;
-    if (a == NULL) return 1;
-    return typekey_compare(b, jl_svec_data(a->parameters), jl_svec_len(a->parameters));
+    if (a == b)
+        return 0;
+    if (b == NULL)
+        return -1;
+    if (a == NULL)
+        return 1;
+    return type_hash(b) - type_hash(a);
 }
 
 void jl_sort_types(jl_value_t **types, size_t length)
@@ -643,7 +635,8 @@ static int typekey_eq(jl_datatype_t *tt, jl_value_t **key, size_t n)
     // TOOD: This shouldn't be necessary
     JL_GC_PROMISE_ROOTED(tt);
     size_t tnp = jl_nparams(tt);
-    if (n != tnp) return 0;
+    if (n != tnp)
+        return 0;
     if (tt->name == jl_type_typename) {
         // for Type{T}, require `typeof(T)` to match also, to avoid incorrect
         // dispatch from changing the type of something.
@@ -652,7 +645,7 @@ static int typekey_eq(jl_datatype_t *tt, jl_value_t **key, size_t n)
         jl_value_t *kj = key[0], *tj = jl_tparam0(tt);
         return (kj == tj || (jl_typeof(tj) == jl_typeof(kj) && jl_types_equal(tj, kj)));
     }
-    for(j=0; j < n; j++) {
+    for (j = 0; j < n; j++) {
         jl_value_t *kj = key[j], *tj = jl_svecref(tt->parameters,j);
         if (tj != kj) {
             // require exact same Type{T}. see e.g. issue #22842
@@ -670,28 +663,24 @@ static int typekey_eq(jl_datatype_t *tt, jl_value_t **key, size_t n)
 // ~n, where n is the index where the type should be inserted.
 static ssize_t lookup_type_idx(jl_typename_t *tn, jl_value_t **key, size_t n, int ordered)
 {
-    if (n==0) return -1;
+    if (n == 0)
+        return -1;
     if (ordered) {
         jl_svec_t *cache = tn->cache;
         jl_datatype_t **data = (jl_datatype_t**)jl_svec_data(cache);
         size_t cl = jl_svec_len(cache);
         ssize_t lo = -1;
         ssize_t hi = cl;
+        size_t hash = typekey_hash(key, n);
         while (lo < hi-1) {
             ssize_t m = ((size_t)(lo+hi))>>1;
-            int cmp = typekey_compare(data[m], key, n);
-            if (cmp > 0)
+            unsigned cmphash = data[m] ? type_hash(data[m]) : -1u;
+            if (hash > cmphash)
                 lo = m;
             else
                 hi = m;
         }
-        /*
-          When a module is replaced, the new versions of its types are different but
-          cannot be distinguished by typekey_compare, since the TypeNames can only
-          be distinguished by addresses, which don't have a reliable order. So we
-          need to allow sequences of typekey_compare-equal types in the ordered cache.
-        */
-        while (hi < cl && typekey_compare(data[hi], key, n) == 0) {
+        while (hi < cl && data[hi] && type_hash(data[hi]) == hash) {
             jl_datatype_t *tt = data[hi];
             if (typekey_eq(tt, key, n))
                 return hi;
@@ -704,9 +693,10 @@ static ssize_t lookup_type_idx(jl_typename_t *tn, jl_value_t **key, size_t n, in
         jl_datatype_t **data = (jl_datatype_t**)jl_svec_data(cache);
         size_t cl = jl_svec_len(cache);
         ssize_t i;
-        for(i=0; i < cl; i++) {
+        for (i = 0; i < cl; i++) {
             jl_datatype_t *tt = data[i];
-            if (tt == NULL) return ~i;
+            if (tt == NULL)
+                return ~i;
             if (typekey_eq(tt, key, n))
                 return i;
         }
@@ -752,7 +742,7 @@ static void cache_insert_type(jl_value_t *type, ssize_t insert_at, int ordered)
 {
     assert(jl_is_datatype(type));
     // assign uid if it hasn't been done already
-    if (!jl_is_abstracttype(type) && ((jl_datatype_t*)type)->uid==0)
+    if (!jl_is_abstracttype(type) && ((jl_datatype_t*)type)->uid == 0)
         ((jl_datatype_t*)type)->uid = jl_assign_type_uid();
     jl_svec_t *cache;
     if (ordered)
@@ -761,7 +751,7 @@ static void cache_insert_type(jl_value_t *type, ssize_t insert_at, int ordered)
         cache = ((jl_datatype_t*)type)->name->linearcache;
     assert(jl_is_svec(cache));
     size_t n = jl_svec_len(cache);
-    if (n==0 || jl_svecref(cache,n-1) != NULL) {
+    if (n == 0 || jl_svecref(cache, n - 1) != NULL) {
         jl_svec_t *nc = jl_alloc_svec(n < 8 ? 8 : (n*3)>>1);
         memcpy(jl_svec_data(nc), jl_svec_data(cache), sizeof(void*) * n);
         if (ordered)
@@ -995,6 +985,8 @@ void jl_precompute_memoized_dt(jl_datatype_t *dt)
     dt->hasfreetypevars = 0;
     dt->isconcretetype = !dt->abstract;
     dt->isdispatchtuple = istuple;
+    if (dt->name == jl_vararg_typename)
+        dt->isconcretetype = 0;
     size_t i, l = jl_nparams(dt);
     for (i = 0; i < l; i++) {
         jl_value_t *p = jl_tparam(dt, i);
@@ -1275,7 +1267,6 @@ static jl_value_t *inst_datatype_inner(jl_datatype_t *dt, jl_svec_t *p, jl_value
     ndt->mutabl = dt->mutabl;
     ndt->abstract = dt->abstract;
     ndt->instance = NULL;
-    ndt->uid = 0;
     ndt->size = 0;
     jl_precompute_memoized_dt(ndt);
     if (istuple)
@@ -1712,7 +1703,7 @@ void jl_init_types(void) JL_GC_DISABLED
     jl_datatype_type->name->wrapper = (jl_value_t*)jl_datatype_type;
     jl_datatype_type->super = (jl_datatype_t*)jl_type_type;
     jl_datatype_type->parameters = jl_emptysvec;
-    jl_datatype_type->name->names = jl_perm_symsvec(19,
+    jl_datatype_type->name->names = jl_perm_symsvec(20,
                                                     "name",
                                                     "super",
                                                     "parameters",
@@ -1723,6 +1714,7 @@ void jl_init_types(void) JL_GC_DISABLED
                                                     "size",
                                                     "ninitialized",
                                                     "uid",
+                                                    "hash",
                                                     "abstract",
                                                     "mutable",
                                                     "hasfreetypevars",
@@ -1732,7 +1724,7 @@ void jl_init_types(void) JL_GC_DISABLED
                                                     "zeroinit",
                                                     "isinlinealloc",
                                                     "has_concrete_subtype");
-    jl_datatype_type->types = jl_svec(19,
+    jl_datatype_type->types = jl_svec(20,
                                       jl_typename_type,
                                       jl_datatype_type,
                                       jl_simplevector_type,
@@ -1741,7 +1733,7 @@ void jl_init_types(void) JL_GC_DISABLED
                                       jl_any_type, jl_any_type, jl_any_type, jl_any_type, // properties
                                       jl_any_type, jl_any_type, jl_any_type, jl_any_type,
                                       jl_any_type, jl_any_type, jl_any_type, jl_any_type,
-                                      jl_any_type);
+                                      jl_any_type, jl_any_type);
     jl_datatype_type->instance = NULL;
     jl_datatype_type->uid = jl_assign_type_uid();
     jl_datatype_type->abstract = 0;
@@ -1852,19 +1844,15 @@ void jl_init_types(void) JL_GC_DISABLED
     jl_vararg_type = (jl_unionall_t*)jl_new_abstracttype((jl_value_t*)jl_symbol("Vararg"), core, jl_any_type, tv)->name->wrapper;
     jl_vararg_typename = ((jl_datatype_t*)jl_unwrap_unionall((jl_value_t*)jl_vararg_type))->name;
 
-    jl_anytuple_type = jl_new_datatype(jl_symbol("Tuple"), core, jl_any_type, jl_emptysvec,
-                                       jl_emptysvec, jl_emptysvec, 0, 0, 0);
+    jl_svec_t *anytuple_params = jl_svec(1, jl_wrap_vararg((jl_value_t*)jl_any_type, (jl_value_t*)NULL));
+    jl_anytuple_type = jl_new_datatype(jl_symbol("Tuple"), core, jl_any_type, anytuple_params,
+                                       jl_emptysvec, anytuple_params, 0, 0, 0);
     jl_tuple_typename = jl_anytuple_type->name;
-    jl_anytuple_type->uid = 0;
-    jl_anytuple_type->parameters = jl_svec(1, jl_wrap_vararg((jl_value_t*)jl_any_type, (jl_value_t*)NULL));
-    jl_anytuple_type->types = jl_anytuple_type->parameters;
-    jl_anytuple_type->layout = NULL;
-    jl_anytuple_type->instance = NULL;
-    jl_anytuple_type->hasfreetypevars = 0;
+    // fix some miscomputed values, since we didn't know this was going to be a Tuple in jl_precompute_memoized_dt
+    jl_tuple_typename->wrapper = jl_anytuple_type; // remove UnionAll wrappers
     jl_anytuple_type->isconcretetype = 0;
-    jl_anytuple_type->isdispatchtuple = 0;
-    jl_anytuple_type->isbitstype = 0;
-    jl_anytuple_type->isinlinealloc = 0;
+    jl_anytuple_type->layout = NULL;
+    jl_anytuple_type->size = 0;
 
     jl_tvar_t *tttvar = tvar("T");
     ((jl_datatype_t*)jl_type_type)->parameters = jl_svec(1, tttvar);
@@ -2295,7 +2283,7 @@ void jl_init_types(void) JL_GC_DISABLED
     jl_svecset(jl_datatype_type->types, 7, jl_int32_type);
     jl_svecset(jl_datatype_type->types, 8, jl_int32_type);
     jl_svecset(jl_datatype_type->types, 9, jl_int32_type);
-    jl_svecset(jl_datatype_type->types, 10, jl_bool_type);
+    jl_svecset(jl_datatype_type->types, 10, jl_int32_type);
     jl_svecset(jl_datatype_type->types, 11, jl_bool_type);
     jl_svecset(jl_datatype_type->types, 12, jl_bool_type);
     jl_svecset(jl_datatype_type->types, 13, jl_bool_type);
@@ -2304,6 +2292,7 @@ void jl_init_types(void) JL_GC_DISABLED
     jl_svecset(jl_datatype_type->types, 16, jl_bool_type);
     jl_svecset(jl_datatype_type->types, 17, jl_bool_type);
     jl_svecset(jl_datatype_type->types, 18, jl_bool_type);
+    jl_svecset(jl_datatype_type->types, 19, jl_bool_type);
     jl_svecset(jl_typename_type->types, 1, jl_module_type);
     jl_svecset(jl_typename_type->types, 6, jl_long_type);
     jl_svecset(jl_typename_type->types, 3, jl_type_type);

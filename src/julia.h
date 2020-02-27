@@ -448,6 +448,7 @@ typedef struct _jl_datatype_t {
     int32_t size; // TODO: move to _jl_datatype_layout_t
     int32_t ninitialized;
     uint32_t uid;
+    uint32_t hash;
     uint8_t abstract;
     uint8_t mutabl;
     // memoized properties

@@ -12,8 +12,6 @@ static int jl_table_assign_bp(jl_array_t **pa, jl_value_t *key, jl_value_t *val)
 
 JL_DLLEXPORT jl_array_t *jl_idtable_rehash(jl_array_t *a, size_t newsz)
 {
-    // Assume *pa don't need a write barrier
-    // pa doesn't have to be a GC slot but *pa needs to be rooted
     size_t sz = jl_array_len(a);
     size_t i;
     jl_value_t **ol = (jl_value_t **)a->data;
@@ -28,10 +26,6 @@ JL_DLLEXPORT jl_array_t *jl_idtable_rehash(jl_array_t *a, size_t newsz)
             // can (and will) occur in a recursive call inside table_lookup_bp
         }
     }
-    // we do not check the write barrier here
-    // because pa always points to a C stack location
-    // (see jl_eqtable_put and jl_finalize_deserializer)
-    // it should be changed if this assumption no longer holds
     JL_GC_POP();
     return newa;
 }
