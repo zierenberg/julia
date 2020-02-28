@@ -563,7 +563,7 @@ static unsigned typekey_hash(jl_value_t **key, size_t n) JL_NOTSAFEPOINT
                     return 0;
                 unsigned hashp = dk->hash;
                 if (hashp == 0)
-                    return 0;
+                    hashp = dk->uid;
                 hash = bitmix(hashp, hash);
             }
         }
