@@ -1110,7 +1110,6 @@ static jl_value_t *inst_datatype_inner(jl_datatype_t *dt, jl_svec_t *p, jl_value
     int isnamedtuple = (tn == jl_namedtuple_typename);
     // check type cache
     if (cacheable) {
-        JL_LOCK(&typecache_lock); // Might GC
         size_t i;
         for (i = 0; i < ntp; i++) {
             jl_value_t *pi = iparams[i];
@@ -1138,16 +1137,12 @@ static jl_value_t *inst_datatype_inner(jl_datatype_t *dt, jl_svec_t *p, jl_value
             }
         }
         jl_value_t *lkup = (jl_value_t*)lookup_type(tn, iparams, ntp);
-        if (lkup != NULL) {
-            JL_UNLOCK(&typecache_lock); // Might GC
+        if (lkup != NULL)
             return lkup;
-        }
     }
     jl_value_t *stack_lkup = lookup_type_stack(stack, dt, ntp, iparams);
-    if (stack_lkup) {
-        if (cacheable) JL_UNLOCK(&typecache_lock); // Might GC
+    if (stack_lkup)
         return stack_lkup;
-    }
 
     if (!istuple) {
         if (jl_is_vararg_type((jl_value_t*)dt) && ntp == 2) {
@@ -1169,7 +1164,6 @@ static jl_value_t *inst_datatype_inner(jl_datatype_t *dt, jl_svec_t *p, jl_value
     }
     else if (ntp == 0 && jl_emptytuple_type != NULL) {
         // empty tuple type case
-        if (cacheable) JL_UNLOCK(&typecache_lock); // Might GC
         return (jl_value_t*)jl_emptytuple_type;
     }
 
@@ -1188,7 +1182,6 @@ static jl_value_t *inst_datatype_inner(jl_datatype_t *dt, jl_svec_t *p, jl_value
             (last == (jl_value_t*)jl_vararg_type ||  // Tuple{Vararg} == Tuple
              (va0 == (jl_value_t*)jl_any_type &&
               jl_is_unionall(last) && va1 == (jl_value_t*)((jl_unionall_t*)last)->var))) {
-            if (cacheable) JL_UNLOCK(&typecache_lock); // Might GC
             JL_GC_POP();
             return (jl_value_t*)jl_anytuple_type;
         }
@@ -1205,7 +1198,6 @@ static jl_value_t *inst_datatype_inner(jl_datatype_t *dt, jl_svec_t *p, jl_value
             ssize_t nt = jl_unbox_long(va1);
             assert(nt >= 0);
             if (nt == 0 || !jl_has_free_typevars(va0)) {
-                if (cacheable) JL_UNLOCK(&typecache_lock); // Might GC
                 if (ntp == 1) {
                     JL_GC_POP();
                     return jl_tupletype_fill(nt, va0);
@@ -1233,8 +1225,19 @@ static jl_value_t *inst_datatype_inner(jl_datatype_t *dt, jl_svec_t *p, jl_value
     // move array of instantiated parameters to heap; we need to keep it
     if (p == NULL) {
         p = jl_alloc_svec_uninit(ntp);
-        for(size_t i=0; i < ntp; i++)
+        for (size_t i = 0; i < ntp; i++)
             jl_svecset(p, i, iparams[i]);
+    }
+
+    // acquire the write lock now that we know we need a new object
+    // since we're going to immediately leak it globally via the instantiation stack
+    if (cacheable) {
+        JL_LOCK(&typecache_lock); // Might GC
+        jl_value_t *lkup = (jl_value_t*)lookup_type(tn, iparams, ntp);
+        if (lkup != NULL) {
+            JL_UNLOCK(&typecache_lock); // Might GC
+            return lkup;
+        }
     }
 
     // create and initialize new type
@@ -1313,9 +1316,7 @@ static jl_value_t *inst_datatype_inner(jl_datatype_t *dt, jl_svec_t *p, jl_value
         ndt->super = (jl_datatype_t*)inst_type_w_((jl_value_t*)dt->super, env, stack, 1);
         jl_gc_wb(ndt, ndt->super);
     }
-    if (cacheable) {
-        jl_cache_type_(ndt);
-    }
+
     jl_svec_t *ftypes = dt->types;
     if (ftypes == NULL)
         ftypes = primarydt->types;
@@ -1334,22 +1335,21 @@ static jl_value_t *inst_datatype_inner(jl_datatype_t *dt, jl_svec_t *p, jl_value
         else if (cacheable) {
             // recursively instantiate the types of the fields
             if (dt->types == NULL)
-                ndt->types = jl_compute_fieldtypes(ndt);
+                ndt->types = jl_compute_fieldtypes(ndt, (void*)stack);
             else
                 ndt->types = inst_ftypes(ftypes, env, stack);
             jl_gc_wb(ndt, ndt->types);
         }
     }
 
-    if (cacheable && !jl_is_primitivetype(dt) && ndt->types != NULL && !ndt->abstract) {
-        // XXX: another thread might read these values before we got a chance to set them
-        // we might need to make two caches: one that can be examined from inside the writelock
-        // (so recursively, for jl_compute_fieldtypes), and one that only contains
-        // the finished immutable datatype objects
-        jl_compute_field_offsets(ndt);
-    }
-
+    // now publish the finished result
     if (cacheable) {
+        if (!jl_is_primitivetype(dt) && ndt->types != NULL && !ndt->abstract) {
+            jl_compute_field_offsets(ndt);
+        }
+
+        jl_value_t *nndt = jl_cache_type_(ndt);
+        assert(nndt == (jl_value_t*)ndt); (void)nndt;
         JL_UNLOCK(&typecache_lock); // Might GC
     }
 
@@ -1606,7 +1606,7 @@ jl_value_t *jl_wrap_vararg(jl_value_t *t, jl_value_t *n)
     return vn;
 }
 
-JL_DLLEXPORT jl_svec_t *jl_compute_fieldtypes(jl_datatype_t *st JL_PROPAGATES_ROOT)
+JL_DLLEXPORT jl_svec_t *jl_compute_fieldtypes(jl_datatype_t *st JL_PROPAGATES_ROOT, void *stack)
 {
     assert(st->name != jl_namedtuple_typename && st->name != jl_tuple_typename);
     jl_datatype_t *wt = (jl_datatype_t*)jl_unwrap_unionall(st->name->wrapper);
@@ -1622,7 +1622,7 @@ JL_DLLEXPORT jl_svec_t *jl_compute_fieldtypes(jl_datatype_t *st JL_PROPAGATES_RO
     }
     jl_typestack_t top;
     top.tt = st;
-    top.prev = NULL;
+    top.prev = (jl_typestack_t*)stack;
     st->types = inst_ftypes(wt->types, &env[n - 1], &top);
     jl_gc_wb(st, st->types);
     return st->types;
