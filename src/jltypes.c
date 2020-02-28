@@ -540,50 +540,10 @@ JL_DLLEXPORT jl_value_t *jl_type_unionall(jl_tvar_t *v, jl_value_t *body)
 
 // --- type instantiation and cache ---
 
-static int contains_unions(jl_value_t *type)
-{
-    if (jl_is_uniontype(type) || jl_is_unionall(type)) return 1;
-    if (!jl_is_datatype(type)) return 0;
-    int i;
-    for(i=0; i < jl_nparams(type); i++) {
-        if (contains_unions(jl_tparam(type,i)))
-            return 1;
-    }
-    return 0;
-}
-
-static intptr_t wrapper_id(jl_value_t *t) JL_NOTSAFEPOINT
-{
-    // DataType wrappers occur often, e.g. when called as constructors.
-    // make sure any type equal to a wrapper gets a consistent, ordered ID.
-    if (!jl_is_unionall(t))
-        return 0;
-    jl_value_t *u = jl_unwrap_unionall(t);
-    if (jl_is_datatype(u) && ((jl_datatype_t*)u)->name->wrapper == t)
-        return ((jl_datatype_t*)u)->name->hash;
-    return 0;
-}
-
-// this function determines whether a type is simple enough to form
-// a total order based on UIDs and object_id.
-static int is_typekey_ordered(jl_value_t **key, size_t n)
-{
-    size_t i;
-    for (i = 0; i < n; i++) {
-        jl_value_t *k = key[i];
-        if (jl_is_typevar(k))
-            return 0;
-        if (jl_is_type(k) && k != jl_bottom_type && !wrapper_id(k) &&
-            !(jl_is_datatype(k) && (((jl_datatype_t*)k)->uid ||
-                                    (!jl_has_free_typevars(k) && !contains_unions(k)))))
-            return 0;
-    }
-    return 1;
-}
-
-// stable numbering for types--starts with name->hash, then falls back to objectid
 static unsigned type_hash(jl_datatype_t *val) JL_NOTSAFEPOINT;
 
+// stable numbering for types--starts with name->hash, then falls back to objectid
+// returns 0 if the stable hash value does not exist
 static unsigned typekey_hash(jl_value_t **key, size_t n) JL_NOTSAFEPOINT
 {
     size_t j;
@@ -591,22 +551,33 @@ static unsigned typekey_hash(jl_value_t **key, size_t n) JL_NOTSAFEPOINT
     for (j = 0; j < n; j++) {
         jl_value_t *kj = key[j];
         jl_datatype_t *dk = (jl_datatype_t*)(jl_is_unionall(kj) ? jl_unwrap_unionall(kj) : kj);
-        if (!jl_is_datatype(kj))
+        if (!jl_is_datatype(dk)) {
+            if (jl_is_typevar(dk))
+                return 0;
+            if (jl_is_uniontype(dk))
+                return 0;
             hash = bitmix(jl_object_id(kj), hash);
-        else if (dk->name->wrapper == kj)
+        }
+        else {
             hash = bitmix(dk->name->hash, hash);
-        else
-            hash = bitmix(type_hash(dk), hash);
+            if (dk->name->wrapper != kj) {
+                if (!dk->uid || dk->hasfreetypevars)
+                    return 0;
+                unsigned hashp = type_hash(dk);
+                if (hashp == 0)
+                    return 0;
+                hash = bitmix(hashp, hash);
+            }
+        }
     }
     return hash ? hash : 1;
 }
 
+// memoized convenience wrapper around typekey_hash for the parameters of a type
 static unsigned type_hash(jl_datatype_t *val) JL_NOTSAFEPOINT
 {
     unsigned hash = val->hash;
-    if (hash == 0) {
-        hash = 3;
-        hash = bitmix(val->name->hash, hash);
+    if (__unlikely(hash == 0)) {
         hash = typekey_hash(jl_svec_data(val->parameters), jl_nparams(val));
         val->hash = hash;
     }
@@ -663,14 +634,13 @@ static ssize_t lookup_type_idx_linear(jl_svec_t *cache, jl_value_t **key, size_t
 }
 
 /* returns val if key is in hash, otherwise NULL */
-static jl_value_t *lookup_type_set(jl_svec_t *cache, jl_value_t **key, size_t n)
+static jl_value_t *lookup_type_set(jl_svec_t *cache, jl_value_t **key, size_t n, uint_t hv)
 {
     size_t sz = jl_svec_len(cache);
     if (sz == 0)
         return NULL;
     size_t maxprobe = max_probe(sz);
     jl_datatype_t **tab = (jl_datatype_t**)jl_svec_data(cache);
-    uint_t hv = typekey_hash(key, n);
     size_t index = h2index(hv, sz);
     size_t orig = index;
     size_t iter = 0;
@@ -689,13 +659,15 @@ static jl_value_t *lookup_type_set(jl_svec_t *cache, jl_value_t **key, size_t n)
 static jl_value_t *lookup_type(jl_typename_t *tn, jl_value_t **key, size_t n)
 {
     JL_TIMING(TYPE_CACHE_LOOKUP);
-    int ord = is_typekey_ordered(key, n);
-    if (ord) {
-        return lookup_type_set(tn->cache, key, n);
+    uint_t hv = typekey_hash(key, n);
+    if (hv) {
+        jl_svec_t *cache = jl_atomic_load_relaxed(&tn->cache);
+        return lookup_type_set(cache, key, n, hv);
     }
     else {
-        ssize_t idx = lookup_type_idx_linear(tn->linearcache, key, n);
-        return idx < 0 ? NULL : jl_svecref(tn->linearcache, idx);
+        jl_svec_t *linearcache = jl_atomic_load_relaxed(&tn->linearcache);
+        ssize_t idx = lookup_type_idx_linear(linearcache, key, n);
+        return idx < 0 ? NULL : jl_svecref(linearcache, idx);
     }
 }
 
@@ -725,13 +697,12 @@ static int is_cacheable(jl_datatype_t *type)
 }
 
 
-static int cache_insert_type_(jl_svec_t *a, jl_datatype_t *val)
+static int cache_insert_type_(jl_svec_t *a, jl_datatype_t *val, uint_t hv)
 {
     jl_datatype_t **tab = (jl_datatype_t**)jl_svec_data(a);
     size_t sz = jl_svec_len(a);
     if (sz <= 1)
         return 0;
-    uint_t hv = type_hash(val);
     size_t orig, index, iter;
     iter = 0;
     index = h2index(hv, sz);
@@ -753,11 +724,11 @@ static int cache_insert_type_(jl_svec_t *a, jl_datatype_t *val)
 
 static jl_svec_t *cache_rehash(jl_svec_t *a, size_t newsz);
 
-static void cache_insert_type(jl_datatype_t *val)
+static void cache_insert_type(jl_datatype_t *val, uint_t hv)
 {
     jl_svec_t *a = val->name->cache;
     while (1) {
-        if (cache_insert_type_(a, val))
+        if (cache_insert_type_(a, val, hv))
             return;
 
         /* table full */
@@ -788,8 +759,11 @@ static jl_svec_t *cache_rehash(jl_svec_t *a, size_t newsz)
         jl_svec_t *newa = jl_alloc_svec(newsz);
         JL_GC_PUSH1(&newa);
         for (i = 0; i < sz; i += 1) {
-            if (ol[i] != NULL) {
-                if (!cache_insert_type_(newa, ol[i])) {
+            jl_datatype_t *val = ol[i];
+            if (val != NULL) {
+                uint_t hv = type_hash(val);
+                assert(hv);
+                if (!cache_insert_type_(newa, val, hv)) {
                     break;
                 }
             }
@@ -825,15 +799,15 @@ jl_value_t *jl_cache_type_(jl_datatype_t *type)
         assert(jl_is_datatype(type));
         jl_value_t **key = jl_svec_data(type->parameters);
         int n = jl_svec_len(type->parameters);
-        int ord = is_typekey_ordered(key, n);
-        if (ord) {
-            jl_value_t *cachetype = lookup_type_set(type->name->cache, key, n);
+        uint_t hv = typekey_hash(key, n);
+        if (hv) {
+            jl_value_t *cachetype = lookup_type_set(type->name->cache, key, n, hv);
             if (cachetype)
                 return cachetype;
             // assign uid if it hasn't been done already
             if (!jl_is_abstracttype((jl_value_t*)type) && type->uid == 0)
                 type->uid = jl_assign_type_uid();
-            cache_insert_type(type);
+            cache_insert_type(type, hv);
         }
         else {
             ssize_t idx = lookup_type_idx_linear(type->name->linearcache, key, n);
