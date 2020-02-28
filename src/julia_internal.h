@@ -462,7 +462,7 @@ int jl_count_union_components(jl_value_t *v);
 jl_value_t *jl_nth_union_component(jl_value_t *v JL_PROPAGATES_ROOT, int i) JL_NOTSAFEPOINT;
 int jl_find_union_component(jl_value_t *haystack, jl_value_t *needle, unsigned *nth) JL_NOTSAFEPOINT;
 jl_datatype_t *jl_new_uninitialized_datatype(void);
-void jl_precompute_memoized_dt(jl_datatype_t *dt);
+void jl_precompute_memoized_dt(jl_datatype_t *dt, int cacheable);
 jl_datatype_t *jl_wrap_Type(jl_value_t *t);  // x -> Type{x}
 jl_value_t *jl_wrap_vararg(jl_value_t *t, jl_value_t *n);
 void jl_assign_bits(void *dest, jl_value_t *bits) JL_NOTSAFEPOINT;

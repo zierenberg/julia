@@ -387,6 +387,7 @@ static void jl_serialize_datatype(jl_serializer_state *s, jl_datatype_t *dt) JL_
     if (!dt->abstract) {
         write_uint16(s->s, dt->ninitialized);
     }
+    write_int32(s->s, dt->hash);
 
     if (has_layout) {
         uint8_t layout = 0;
@@ -1456,6 +1457,7 @@ static jl_value_t *jl_deserialize_datatype(jl_serializer_state *s, int pos, jl_v
     else
         dt->ninitialized = 0;
     dt->uid = 0;
+    dt->hash = read_int32(s->s);
 
     if (has_layout) {
         uint8_t layout = read_uint8(s->s);
