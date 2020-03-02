@@ -541,35 +541,34 @@ JL_DLLEXPORT jl_value_t *jl_type_unionall(jl_tvar_t *v, jl_value_t *body)
 // --- type instantiation and cache ---
 
 // stable numbering for types--starts with name->hash, then falls back to objectid
-// returns 0 if the stable hash value does not exist
+// sets failed if the stable hash value omits information
 static unsigned type_hash(jl_value_t *kj, int *failed)
 {
-    jl_datatype_t *dk = (jl_datatype_t*)(jl_is_unionall(kj) ? jl_unwrap_unionall(kj) : kj);
-    if (!jl_is_datatype(dk)) {
-        if (jl_is_typevar(dk)) {
-            if (!*failed) {
-                *failed = 1;
-                return 0;
-            }
-            // ignore var and lb, since those might get normalized out in equality testing
-            return type_hash(((jl_tvar_t*)kj)->ub, failed);
-        } else if (jl_is_uniontype(dk)) {
-            if (!*failed) {
-                *failed = 1;
-                return 0;
-            }
-            unsigned hasha = type_hash(((jl_uniontype_t*)kj)->a, failed);
-            unsigned hashb = type_hash(((jl_uniontype_t*)kj)->b, failed);
-            // use a associative mixing function, with well-defined overflow
-            // since Union is associative
-            return hasha + hashb;
+    jl_value_t *uw = jl_is_unionall(kj) ? jl_unwrap_unionall(kj) : kj;
+    if (jl_is_datatype(uw)) {
+        return bitmix(((jl_datatype_t*)uw)->hash, ((jl_datatype_t*)uw)->name->hash);
+    }
+    else if (jl_is_typevar(uw)) {
+        if (!*failed) {
+            *failed = 1;
+            return 0;
         }
-        else {
-            return jl_object_id(kj);
-        }
+        // ignore var and lb, since those might get normalized out in equality testing
+        return type_hash(((jl_tvar_t*)uw)->ub, failed);
+    }
+    else if (jl_is_uniontype(uw)) {
+        //if (!*failed) {
+        //    *failed = 1;
+        //    return 0;
+        //}
+        unsigned hasha = type_hash(((jl_uniontype_t*)uw)->a, failed);
+        unsigned hashb = type_hash(((jl_uniontype_t*)uw)->b, failed);
+        // use a associative mixing function, with well-defined overflow
+        // since Union is associative
+        return hasha + hashb;
     }
     else {
-        return dk->hash;
+        return jl_object_id(uw);
     }
 }
 
@@ -580,7 +579,7 @@ static unsigned typekey_hash(jl_value_t **key, size_t n, int nofail) JL_NOTSAFEP
     int failed = nofail;
     for (j = 0; j < n; j++) {
         hash = bitmix(type_hash(key[j], &failed), hash);
-        if (failed && nofail)
+        if (failed && !nofail)
             return 0;
     }
     return hash ? hash : 1;
@@ -806,8 +805,9 @@ jl_value_t *jl_cache_type_(jl_datatype_t *type)
         assert(jl_is_datatype(type));
         jl_value_t **key = jl_svec_data(type->parameters);
         int n = jl_svec_len(type->parameters);
-        uint_t hv = type->hash;
+        uint_t hv = typekey_hash(key, n, 0);
         if (hv) {
+            assert(hv == type->hash);
             jl_value_t *cachetype = lookup_type_set(type->name->cache, key, n, hv);
             if (cachetype)
                 return cachetype;
@@ -1018,7 +1018,7 @@ static jl_value_t *lookup_type_stack(jl_typestack_t *stack, jl_datatype_t *tt, s
     return NULL;
 }
 
-void jl_precompute_memoized_dt(jl_datatype_t *dt, int cacheable)
+void jl_precompute_memoized_dt(jl_datatype_t *dt)
 {
     int istuple = (dt->name == jl_tuple_typename);
     dt->hasfreetypevars = 0;
@@ -1042,7 +1042,7 @@ void jl_precompute_memoized_dt(jl_datatype_t *dt, int cacheable)
                  (((jl_datatype_t*)p)->name == jl_type_typename && !((jl_datatype_t*)p)->hasfreetypevars));
         }
     }
-    dt->hash = bitmix(typekey_hash(jl_svec_data(dt->parameters), l, 1), dt->name->hash);
+    dt->hash = typekey_hash(jl_svec_data(dt->parameters), l, 1);
 }
 
 static void check_datatype_parameters(jl_typename_t *tn, jl_value_t **params, size_t np)
