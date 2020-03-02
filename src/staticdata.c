@@ -1361,12 +1361,10 @@ static void jl_save_system_image_to_stream(ios_t *f)
         for (i = 0; i < builtin_typenames.len; i++) {
             jl_typename_t *tn = (jl_typename_t*)builtin_typenames.items[i];
             jl_prune_type_cache(tn->cache);
-            jl_prune_type_cache(tn->linearcache);
         }
         for (i = 0; i < builtin_typenames.len; i++) {
             jl_typename_t *tn = (jl_typename_t*)builtin_typenames.items[i];
             jl_serialize_value(&s, tn->cache);
-            jl_serialize_value(&s, tn->linearcache);
         }
     }
 

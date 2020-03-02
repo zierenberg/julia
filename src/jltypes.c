@@ -542,27 +542,19 @@ JL_DLLEXPORT jl_value_t *jl_type_unionall(jl_tvar_t *v, jl_value_t *body)
 
 // stable numbering for types--starts with name->hash, then falls back to objectid
 // sets failed if the stable hash value omits information
-static unsigned type_hash(jl_value_t *kj, int *failed)
+static unsigned type_hash(jl_value_t *kj)
 {
     jl_value_t *uw = jl_is_unionall(kj) ? jl_unwrap_unionall(kj) : kj;
     if (jl_is_datatype(uw)) {
         return bitmix(((jl_datatype_t*)uw)->hash, ((jl_datatype_t*)uw)->name->hash);
     }
     else if (jl_is_typevar(uw)) {
-        if (!*failed) {
-            *failed = 1;
-            return 0;
-        }
         // ignore var and lb, since those might get normalized out in equality testing
-        return type_hash(((jl_tvar_t*)uw)->ub, failed);
+        return type_hash(((jl_tvar_t*)uw)->ub);
     }
     else if (jl_is_uniontype(uw)) {
-        //if (!*failed) {
-        //    *failed = 1;
-        //    return 0;
-        //}
-        unsigned hasha = type_hash(((jl_uniontype_t*)uw)->a, failed);
-        unsigned hashb = type_hash(((jl_uniontype_t*)uw)->b, failed);
+        unsigned hasha = type_hash(((jl_uniontype_t*)uw)->a);
+        unsigned hashb = type_hash(((jl_uniontype_t*)uw)->b);
         // use a associative mixing function, with well-defined overflow
         // since Union is associative
         return hasha + hashb;
@@ -572,15 +564,12 @@ static unsigned type_hash(jl_value_t *kj, int *failed)
     }
 }
 
-static unsigned typekey_hash(jl_value_t **key, size_t n, int nofail) JL_NOTSAFEPOINT
+static unsigned typekey_hash(jl_value_t **key, size_t n) JL_NOTSAFEPOINT
 {
     size_t j;
     unsigned hash = 3;
-    int failed = nofail;
     for (j = 0; j < n; j++) {
-        hash = bitmix(type_hash(key[j], &failed), hash);
-        if (failed && !nofail)
-            return 0;
+        hash = bitmix(type_hash(key[j]), hash);
     }
     return hash ? hash : 1;
 }
@@ -619,26 +608,6 @@ static int typekey_eq(jl_datatype_t *tt, jl_value_t **key, size_t n)
     return 1;
 }
 
-// look up a type in a cache by linear search.
-// if found, returns the index of the found item. if not found, returns
-// ~n, where n is the index where the type should be inserted.
-static ssize_t lookup_type_idx_linear(jl_svec_t *cache, jl_value_t **key, size_t n)
-{
-    if (n == 0)
-        return -1;
-    jl_datatype_t **data = (jl_datatype_t**)jl_svec_data(cache);
-    size_t cl = jl_svec_len(cache);
-    ssize_t i;
-    for (i = 0; i < cl; i++) {
-        jl_datatype_t *tt = data[i];
-        if (tt == NULL)
-            return ~i;
-        if (typekey_eq(tt, key, n))
-            return i;
-    }
-    return ~i;
-}
-
 /* returns val if key is in hash, otherwise NULL */
 static jl_value_t *lookup_type_set(jl_svec_t *cache, jl_value_t **key, size_t n, uint_t hv)
 {
@@ -665,16 +634,9 @@ static jl_value_t *lookup_type_set(jl_svec_t *cache, jl_value_t **key, size_t n,
 static jl_value_t *lookup_type(jl_typename_t *tn, jl_value_t **key, size_t n)
 {
     JL_TIMING(TYPE_CACHE_LOOKUP);
-    uint_t hv = typekey_hash(key, n, 0);
-    if (hv) {
-        jl_svec_t *cache = jl_atomic_load_relaxed(&tn->cache);
-        return lookup_type_set(cache, key, n, hv);
-    }
-    else {
-        jl_svec_t *linearcache = jl_atomic_load_relaxed(&tn->linearcache);
-        ssize_t idx = lookup_type_idx_linear(linearcache, key, n);
-        return idx < 0 ? NULL : jl_svecref(linearcache, idx);
-    }
+    uint_t hv = typekey_hash(key, n);
+    jl_svec_t *cache = jl_atomic_load_relaxed(&tn->cache);
+    return lookup_type_set(cache, key, n, hv);
 }
 
 static volatile int t_uid_ctr = 1;
@@ -720,7 +682,6 @@ static int cache_insert_type_(jl_svec_t *a, jl_datatype_t *val, uint_t hv)
             jl_gc_wb(a, val);
             return 1;
         }
-        assert(!typekey_eq(tab[index], jl_svec_data(val->parameters), jl_svec_len(val->parameters)));
         index = (index + 1) & (sz - 1);
         iter++;
     } while (iter <= maxprobe && index != orig);
@@ -781,23 +742,6 @@ static jl_svec_t *cache_rehash(jl_svec_t *a, size_t newsz)
     }
 }
 
-static void linearcache_insert_type(jl_datatype_t *type, ssize_t insert_at)
-{
-    jl_svec_t *cache = type->name->linearcache;
-    assert(jl_is_svec(cache));
-    size_t n = jl_svec_len(cache);
-    if (n == 0 || jl_svecref(cache, n - 1) != NULL) {
-        jl_svec_t *nc = jl_alloc_svec(n < 8 ? 8 : (n*3)>>1);
-        memcpy(jl_svec_data(nc), jl_svec_data(cache), sizeof(void*) * n);
-        type->name->linearcache = nc;
-        jl_gc_wb(type->name, nc);
-        cache = nc;
-        n = jl_svec_len(nc);
-    }
-    assert(jl_svecref(cache, insert_at) == NULL);
-    jl_svecset(cache, insert_at, (jl_value_t*)type);
-}
-
 jl_value_t *jl_cache_type_(jl_datatype_t *type)
 {
     if (is_cacheable(type)) {
@@ -805,26 +749,14 @@ jl_value_t *jl_cache_type_(jl_datatype_t *type)
         assert(jl_is_datatype(type));
         jl_value_t **key = jl_svec_data(type->parameters);
         int n = jl_svec_len(type->parameters);
-        uint_t hv = typekey_hash(key, n, 0);
-        if (hv) {
-            assert(hv == type->hash);
-            jl_value_t *cachetype = lookup_type_set(type->name->cache, key, n, hv);
-            if (cachetype)
-                return cachetype;
-            // assign uid if it hasn't been done already
-            if (!jl_is_abstracttype((jl_value_t*)type) && type->uid == 0)
-                type->uid = jl_assign_type_uid();
-            cache_insert_type(type, hv);
-        }
-        else {
-            ssize_t idx = lookup_type_idx_linear(type->name->linearcache, key, n);
-            if (idx >= 0)
-                return jl_svecref(type->name->linearcache, idx);
-            // assign uid if it hasn't been done already
-            if (!jl_is_abstracttype((jl_value_t*)type) && type->uid == 0)
-                type->uid = jl_assign_type_uid();
-            linearcache_insert_type(type, ~idx);
-        }
+        uint_t hv = type->hash;
+        jl_value_t *cachetype = lookup_type_set(type->name->cache, key, n, hv);
+        if (cachetype)
+            return cachetype;
+        // assign uid if it hasn't been done already
+        if (!jl_is_abstracttype((jl_value_t*)type) && type->uid == 0)
+            type->uid = jl_assign_type_uid();
+        cache_insert_type(type, hv);
     }
     return (jl_value_t*)type;
 }
@@ -1042,7 +974,7 @@ void jl_precompute_memoized_dt(jl_datatype_t *dt)
                  (((jl_datatype_t*)p)->name == jl_type_typename && !((jl_datatype_t*)p)->hasfreetypevars));
         }
     }
-    dt->hash = typekey_hash(jl_svec_data(dt->parameters), l, 1);
+    dt->hash = typekey_hash(jl_svec_data(dt->parameters), l);
 }
 
 static void check_datatype_parameters(jl_typename_t *tn, jl_value_t **params, size_t np)
@@ -1792,12 +1724,11 @@ void jl_init_types(void) JL_GC_DISABLED
     jl_typename_type->name->mt = jl_nonfunction_mt;
     jl_typename_type->super = jl_any_type;
     jl_typename_type->parameters = jl_emptysvec;
-    jl_typename_type->name->names = jl_perm_symsvec(8, "name", "module",
+    jl_typename_type->name->names = jl_perm_symsvec(7, "name", "module",
                                                     "names", "wrapper",
-                                                    "cache", "linearcache",
-                                                    "hash", "mt");
-    jl_typename_type->types = jl_svec(8, jl_symbol_type, jl_any_type, jl_simplevector_type,
-                                      jl_type_type, jl_simplevector_type, jl_simplevector_type,
+                                                    "cache", "hash", "mt");
+    jl_typename_type->types = jl_svec(7, jl_symbol_type, jl_any_type, jl_simplevector_type,
+                                      jl_type_type, jl_simplevector_type,
                                       jl_any_type, jl_any_type);
     jl_typename_type->uid = jl_assign_type_uid();
     jl_typename_type->instance = NULL;
@@ -2338,8 +2269,8 @@ void jl_init_types(void) JL_GC_DISABLED
     jl_svecset(jl_datatype_type->types, 18, jl_bool_type);
     jl_svecset(jl_datatype_type->types, 19, jl_bool_type);
     jl_svecset(jl_typename_type->types, 1, jl_module_type);
-    jl_svecset(jl_typename_type->types, 6, jl_long_type);
     jl_svecset(jl_typename_type->types, 3, jl_type_type);
+    jl_svecset(jl_typename_type->types, 5, jl_long_type);
     jl_svecset(jl_methtable_type->types, 3, jl_long_type);
     jl_svecset(jl_methtable_type->types, 5, jl_module_type);
     jl_svecset(jl_methtable_type->types, 6, jl_array_any_type);
