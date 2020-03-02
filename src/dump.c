@@ -2938,12 +2938,31 @@ static int jl_invalid_types_equal(jl_datatype_t *a, jl_datatype_t *b)
 {
     return jl_subtype((jl_value_t*)a, (jl_value_t*)b) && jl_subtype((jl_value_t*)b, (jl_value_t*)a);
 }
+
 STATIC_INLINE jl_value_t *verify_type(jl_value_t *v) JL_NOTSAFEPOINT
 {
     assert(v && jl_typeof(v) && jl_typeof(jl_typeof(v)) == (jl_value_t*)jl_datatype_type);
     return v;
 }
+
+static int is_cacheable(jl_datatype_t *type)
+{
+    // only cache types whose behavior will not depend on the identities
+    // of contained TypeVars
+    assert(jl_is_datatype(type));
+    jl_svec_t *t = type->parameters;
+    if (jl_svec_len(t) == 0)
+        return 1;
+    // cache abstract types with no free type vars
+    if (jl_is_abstracttype(type))
+        return !jl_has_free_typevars((jl_value_t*)type);
+    // ... or concrete types
+    return jl_is_concrete_type((jl_value_t*)type);
+}
 #endif
+
+jl_datatype_t *jl_lookup_cache_type_(jl_datatype_t *type);
+void jl_cache_type_(jl_datatype_t *type);
 
 static jl_datatype_t *jl_recache_type(jl_datatype_t *dt) JL_GC_DISABLED
 {
@@ -2982,13 +3001,22 @@ static jl_datatype_t *jl_recache_type(jl_datatype_t *dt) JL_GC_DISABLED
 
     // then recache the type itself
     assert(dt->uid == -1);
+    assert(is_cacheable(dt));
     if (jl_svec_len(tt) == 0) { // jl_cache_type doesn't work if length(parameters) == 0
-        dt->uid = jl_assign_type_uid();
+        if (!jl_is_abstracttype((jl_value_t*)dt))
+            dt->uid = jl_assign_type_uid();
         t = dt;
     }
     else {
-        dt->uid = 0;
-        t = (jl_datatype_t*)jl_cache_type_(dt);
+        t = jl_lookup_cache_type_(dt);
+        if (t == NULL) {
+            if (!jl_is_abstracttype((jl_value_t*)dt))
+                dt->uid = jl_assign_type_uid();
+            else
+                dt->uid = 0;
+            jl_cache_type_(dt);
+            t = dt;
+        }
         assert(jl_invalid_types_equal(t, dt));
     }
     ptrhash_put(&uniquing_table, dt, t);

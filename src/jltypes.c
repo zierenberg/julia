@@ -609,7 +609,7 @@ static int typekey_eq(jl_datatype_t *tt, jl_value_t **key, size_t n)
 }
 
 /* returns val if key is in hash, otherwise NULL */
-static jl_value_t *lookup_type_set(jl_svec_t *cache, jl_value_t **key, size_t n, uint_t hv)
+static jl_datatype_t *lookup_type_set(jl_svec_t *cache, jl_value_t **key, size_t n, uint_t hv)
 {
     size_t sz = jl_svec_len(cache);
     if (sz == 0)
@@ -624,18 +624,27 @@ static jl_value_t *lookup_type_set(jl_svec_t *cache, jl_value_t **key, size_t n,
         if (val == NULL)
             return NULL;
         if (val->hash == hv && typekey_eq(val, key, n))
-            return (jl_value_t*)val;
+            return val;
         index = (index + 1) & (sz - 1);
         iter++;
     } while (iter <= maxprobe && index != orig);
     return NULL;
 }
 
-static jl_value_t *lookup_type(jl_typename_t *tn, jl_value_t **key, size_t n)
+static jl_datatype_t *lookup_type(jl_typename_t *tn, jl_value_t **key, size_t n)
 {
     JL_TIMING(TYPE_CACHE_LOOKUP);
     uint_t hv = typekey_hash(key, n);
     jl_svec_t *cache = jl_atomic_load_relaxed(&tn->cache);
+    return lookup_type_set(cache, key, n, hv);
+}
+
+jl_datatype_t *jl_lookup_cache_type_(jl_datatype_t *type)
+{
+    jl_value_t **key = jl_svec_data(type->parameters);
+    int n = jl_svec_len(type->parameters);
+    uint_t hv = type->hash;
+    jl_svec_t *cache = jl_atomic_load_relaxed(&type->name->cache);
     return lookup_type_set(cache, key, n, hv);
 }
 
@@ -649,21 +658,6 @@ int jl_assign_type_uid(void)
     assert(t_uid_ctr != 0);
     return jl_atomic_fetch_add(&t_uid_ctr, 1);
 }
-
-static int is_cacheable(jl_datatype_t *type)
-{
-    // only cache types whose behavior will not depend on the identities
-    // of contained TypeVars
-    assert(jl_is_datatype(type));
-    jl_svec_t *t = type->parameters;
-    if (jl_svec_len(t) == 0) return 0;
-    // cache abstract types with no free type vars
-    if (jl_is_abstracttype(type))
-        return !jl_has_free_typevars((jl_value_t*)type);
-    // ... or concrete types
-    return jl_is_concrete_type((jl_value_t*)type);
-}
-
 
 static int cache_insert_type_(jl_svec_t *a, jl_datatype_t *val, uint_t hv)
 {
@@ -729,7 +723,6 @@ static jl_svec_t *cache_rehash(jl_svec_t *a, size_t newsz)
             jl_datatype_t *val = ol[i];
             if (val != NULL) {
                 uint_t hv = val->hash;
-                assert(hv);
                 if (!cache_insert_type_(newa, val, hv)) {
                     break;
                 }
@@ -742,23 +735,10 @@ static jl_svec_t *cache_rehash(jl_svec_t *a, size_t newsz)
     }
 }
 
-jl_value_t *jl_cache_type_(jl_datatype_t *type)
+void jl_cache_type_(jl_datatype_t *type)
 {
-    if (is_cacheable(type)) {
-        JL_TIMING(TYPE_CACHE_INSERT);
-        assert(jl_is_datatype(type));
-        jl_value_t **key = jl_svec_data(type->parameters);
-        int n = jl_svec_len(type->parameters);
-        uint_t hv = type->hash;
-        jl_value_t *cachetype = lookup_type_set(type->name->cache, key, n, hv);
-        if (cachetype)
-            return cachetype;
-        // assign uid if it hasn't been done already
-        if (!jl_is_abstracttype((jl_value_t*)type) && type->uid == 0)
-            type->uid = jl_assign_type_uid();
-        cache_insert_type(type, hv);
-    }
-    return (jl_value_t*)type;
+    JL_TIMING(TYPE_CACHE_INSERT);
+    cache_insert_type(type, type->hash);
 }
 
 // type instantiation
@@ -1299,9 +1279,7 @@ static jl_value_t *inst_datatype_inner(jl_datatype_t *dt, jl_svec_t *p, jl_value
         if (!jl_is_primitivetype(dt) && ndt->types != NULL && !ndt->abstract) {
             jl_compute_field_offsets(ndt);
         }
-
-        jl_value_t *nndt = jl_cache_type_(ndt);
-        assert(nndt == (jl_value_t*)ndt); (void)nndt;
+        jl_cache_type_(ndt);
         JL_UNLOCK(&typecache_lock); // Might GC
     }
 
