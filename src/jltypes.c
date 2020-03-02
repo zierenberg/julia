@@ -542,31 +542,46 @@ JL_DLLEXPORT jl_value_t *jl_type_unionall(jl_tvar_t *v, jl_value_t *body)
 
 // stable numbering for types--starts with name->hash, then falls back to objectid
 // returns 0 if the stable hash value does not exist
-static unsigned typekey_hash(jl_value_t **key, size_t n) JL_NOTSAFEPOINT
+static unsigned type_hash(jl_value_t *kj, int *failed)
+{
+    jl_datatype_t *dk = (jl_datatype_t*)(jl_is_unionall(kj) ? jl_unwrap_unionall(kj) : kj);
+    if (!jl_is_datatype(dk)) {
+        if (jl_is_typevar(dk)) {
+            if (!*failed) {
+                *failed = 1;
+                return 0;
+            }
+            // ignore var and lb, since those might get normalized out in equality testing
+            return type_hash(((jl_tvar_t*)kj)->ub, failed);
+        } else if (jl_is_uniontype(dk)) {
+            if (!*failed) {
+                *failed = 1;
+                return 0;
+            }
+            unsigned hasha = type_hash(((jl_uniontype_t*)kj)->a, failed);
+            unsigned hashb = type_hash(((jl_uniontype_t*)kj)->b, failed);
+            // use a associative mixing function, with well-defined overflow
+            // since Union is associative
+            return hasha + hashb;
+        }
+        else {
+            return jl_object_id(kj);
+        }
+    }
+    else {
+        return dk->hash;
+    }
+}
+
+static unsigned typekey_hash(jl_value_t **key, size_t n, int nofail) JL_NOTSAFEPOINT
 {
     size_t j;
     unsigned hash = 3;
+    int failed = nofail;
     for (j = 0; j < n; j++) {
-        jl_value_t *kj = key[j];
-        jl_datatype_t *dk = (jl_datatype_t*)(jl_is_unionall(kj) ? jl_unwrap_unionall(kj) : kj);
-        if (!jl_is_datatype(dk)) {
-            if (jl_is_typevar(dk))
-                return 0;
-            if (jl_is_uniontype(dk))
-                return 0;
-            hash = bitmix(jl_object_id(kj), hash);
-        }
-        else {
-            hash = bitmix(dk->name->hash, hash);
-            if (dk->name->wrapper != kj) {
-                if (!dk->uid || dk->hasfreetypevars)
-                    return 0;
-                unsigned hashp = dk->hash;
-                if (hashp == 0)
-                    hashp = dk->uid;
-                hash = bitmix(hashp, hash);
-            }
-        }
+        hash = bitmix(type_hash(key[j], &failed), hash);
+        if (failed && nofail)
+            return 0;
     }
     return hash ? hash : 1;
 }
@@ -651,7 +666,7 @@ static jl_value_t *lookup_type_set(jl_svec_t *cache, jl_value_t **key, size_t n,
 static jl_value_t *lookup_type(jl_typename_t *tn, jl_value_t **key, size_t n)
 {
     JL_TIMING(TYPE_CACHE_LOOKUP);
-    uint_t hv = typekey_hash(key, n);
+    uint_t hv = typekey_hash(key, n, 0);
     if (hv) {
         jl_svec_t *cache = jl_atomic_load_relaxed(&tn->cache);
         return lookup_type_set(cache, key, n, hv);
@@ -1027,7 +1042,7 @@ void jl_precompute_memoized_dt(jl_datatype_t *dt, int cacheable)
                  (((jl_datatype_t*)p)->name == jl_type_typename && !((jl_datatype_t*)p)->hasfreetypevars));
         }
     }
-    dt->hash = typekey_hash(jl_svec_data(dt->parameters), l);
+    dt->hash = bitmix(typekey_hash(jl_svec_data(dt->parameters), l, 1), dt->name->hash);
 }
 
 static void check_datatype_parameters(jl_typename_t *tn, jl_value_t **params, size_t np)
@@ -1296,7 +1311,7 @@ static jl_value_t *inst_datatype_inner(jl_datatype_t *dt, jl_svec_t *p, jl_value
     ndt->abstract = dt->abstract;
     ndt->instance = NULL;
     ndt->size = 0;
-    jl_precompute_memoized_dt(ndt, cacheable);
+    jl_precompute_memoized_dt(ndt);
     if (istuple)
         ndt->ninitialized = ntp - isvatuple;
     else if (isnamedtuple)
@@ -1770,7 +1785,7 @@ void jl_init_types(void) JL_GC_DISABLED
     // also, the `uid` field gets reset after loading a .ji precompile file
     jl_datatype_type->mutabl = 1;
     jl_datatype_type->ninitialized = 3;
-    jl_precompute_memoized_dt(jl_datatype_type, 1);
+    jl_precompute_memoized_dt(jl_datatype_type);
 
     jl_typename_type->name = jl_new_typename_in(jl_symbol("TypeName"), core);
     jl_typename_type->name->wrapper = (jl_value_t*)jl_typename_type;
@@ -1789,7 +1804,7 @@ void jl_init_types(void) JL_GC_DISABLED
     jl_typename_type->abstract = 0;
     jl_typename_type->mutabl = 1;
     jl_typename_type->ninitialized = 2;
-    jl_precompute_memoized_dt(jl_typename_type, 1);
+    jl_precompute_memoized_dt(jl_typename_type);
 
     jl_methtable_type->name = jl_new_typename_in(jl_symbol("MethodTable"), core);
     jl_methtable_type->name->wrapper = (jl_value_t*)jl_methtable_type;
@@ -1809,7 +1824,7 @@ void jl_init_types(void) JL_GC_DISABLED
     jl_methtable_type->abstract = 0;
     jl_methtable_type->mutabl = 1;
     jl_methtable_type->ninitialized = 4;
-    jl_precompute_memoized_dt(jl_methtable_type, 1);
+    jl_precompute_memoized_dt(jl_methtable_type);
 
     jl_symbol_type->name = jl_new_typename_in(jl_symbol("Symbol"), core);
     jl_symbol_type->name->wrapper = (jl_value_t*)jl_symbol_type;
@@ -1824,7 +1839,7 @@ void jl_init_types(void) JL_GC_DISABLED
     jl_symbol_type->abstract = 0;
     jl_symbol_type->mutabl = 1;
     jl_symbol_type->ninitialized = 0;
-    jl_precompute_memoized_dt(jl_symbol_type, 1);
+    jl_precompute_memoized_dt(jl_symbol_type);
 
     jl_simplevector_type->name = jl_new_typename_in(jl_symbol("SimpleVector"), core);
     jl_simplevector_type->name->wrapper = (jl_value_t*)jl_simplevector_type;
@@ -1838,7 +1853,7 @@ void jl_init_types(void) JL_GC_DISABLED
     jl_simplevector_type->abstract = 0;
     jl_simplevector_type->mutabl = 1;
     jl_simplevector_type->ninitialized = 0;
-    jl_precompute_memoized_dt(jl_simplevector_type, 1);
+    jl_precompute_memoized_dt(jl_simplevector_type);
 
     // now they can be used to create the remaining base kinds and types
     jl_nothing_type = jl_new_datatype(jl_symbol("Nothing"), core, jl_any_type, jl_emptysvec,

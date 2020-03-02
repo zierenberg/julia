@@ -591,7 +591,7 @@ JL_DLLEXPORT jl_datatype_t *jl_new_datatype(
             jl_gc_wb(t->name, t->name->wrapper);
         }
     }
-    jl_precompute_memoized_dt(t, 1);
+    jl_precompute_memoized_dt(t);
 
     if (!abstract) {
         if (jl_svec_len(parameters) == 0)
