@@ -86,7 +86,6 @@ jl_datatype_t *jl_new_uninitialized_datatype(void)
 {
     jl_ptls_t ptls = jl_get_ptls_states();
     jl_datatype_t *t = (jl_datatype_t*)jl_gc_alloc(ptls, sizeof(jl_datatype_t), jl_datatype_type);
-    t->uid = 0;
     t->hash = 0;
     t->hasfreetypevars = 0;
     t->isdispatchtuple = 0;
@@ -213,7 +212,7 @@ unsigned jl_special_vector_alignment(size_t nfields, jl_value_t *t)
 STATIC_INLINE int jl_is_datatype_make_singleton(jl_datatype_t *d)
 {
     return (!d->abstract && jl_datatype_size(d) == 0 && d != jl_symbol_type && d->name != jl_array_typename &&
-            d->uid != 0 && !d->mutabl);
+            d->isconcretetype && !d->mutabl);
 }
 
 STATIC_INLINE void jl_maybe_allocate_singleton_instance(jl_datatype_t *st)
@@ -592,11 +591,9 @@ JL_DLLEXPORT jl_datatype_t *jl_new_datatype(
     }
     jl_precompute_memoized_dt(t);
 
-    if (!abstract) {
-        if (jl_svec_len(parameters) == 0)
-            t->uid = jl_assign_type_uid();
+    if (!abstract)
         jl_compute_field_offsets(t);
-    }
+
     JL_GC_POP();
     return t;
 }

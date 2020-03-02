@@ -1417,7 +1417,6 @@ static void jl_save_system_image_to_stream(ios_t *f)
             jl_write_value(&s, tag);
         }
         jl_write_value(&s, s.ptls->root_task->tls);
-        write_uint32(f, jl_get_t_uid_ctr());
         write_uint32(f, jl_get_gs_ctr());
         write_uint32(f, jl_world_counter);
         write_uint32(f, jl_typeinf_world);
@@ -1546,11 +1545,9 @@ static void jl_restore_system_image_from_stream(ios_t *f)
     jl_init_int32_int64_cache();
     jl_init_box_caches();
 
-    uint32_t uid_ctr = read_uint32(f);
     uint32_t gs_ctr = read_uint32(f);
     jl_world_counter = read_uint32(f);
     jl_typeinf_world = read_uint32(f);
-    jl_set_t_uid_ctr(uid_ctr);
     jl_set_gs_ctr(gs_ctr);
     s.s = NULL;
 

@@ -375,9 +375,6 @@ void gc_debug_print_status(void);
 void gc_debug_critical_error(void);
 void jl_print_gc_stats(JL_STREAM *s);
 void jl_gc_reset_alloc_count(void);
-int jl_assign_type_uid(void);
-int  jl_get_t_uid_ctr(void);
-void jl_set_t_uid_ctr(int i);
 uint32_t jl_get_gs_ctr(void);
 void jl_set_gs_ctr(uint32_t ctr);
 

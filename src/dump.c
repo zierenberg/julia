@@ -307,18 +307,18 @@ static void jl_serialize_datatype(jl_serializer_state *s, jl_datatype_t *dt) JL_
     }
     else if (internal) {
         if (jl_unwrap_unionall(dt->name->wrapper) == (jl_value_t*)dt) // comes up often since functions create types
-            tag = 5; // internal, and not in the typename cache (just needs uid reassigned)
+            tag = 5; // internal, and not in the typename cache
         else
-            tag = 10; // anything else that's internal (just needs uid reassigned and possibly recaching)
+            tag = 10; // anything else that's internal (just may need recaching)
     }
     else if (type_recursively_external(dt)) {
         tag = 7; // external type that can be immediately recreated (with apply_type)
     }
     else if (type_in_worklist(dt)) {
-        tag = 11; // external, but definitely new (still needs uid and caching, but not full unique-ing)
+        tag = 11; // external, but definitely new (still needs caching, but not full unique-ing)
     }
     else {
-        // this'll need a uid and unique-ing later
+        // this'll need unique-ing later
         // flag this in the backref table as special
         uintptr_t *bp = (uintptr_t*)ptrhash_bp(&backref_table, dt);
         assert(*bp != (uintptr_t)HT_NOTFOUND);
@@ -1064,15 +1064,13 @@ static void jl_serialize_value_(jl_serializer_state *s, jl_value_t *v, int as_li
             jl_typemap_level_t *node = (jl_typemap_level_t*)v;
             assert( // make sure this type has the expected ordering and layout
                 offsetof(jl_typemap_level_t, arg1) == 0 * sizeof(jl_value_t*) &&
-                offsetof(jl_typemap_level_t, targ) == 2 * sizeof(jl_value_t*) &&
-                offsetof(jl_typemap_level_t, linear) == 4 * sizeof(jl_value_t*) &&
-                offsetof(jl_typemap_level_t, any) == 5 * sizeof(jl_value_t*) &&
-                offsetof(jl_typemap_level_t, key) == 6 * sizeof(jl_value_t*) &&
-                sizeof(jl_typemap_level_t) == 7 * sizeof(jl_value_t*));
-            jl_serialize_value(s, jl_nothing);
-            jl_serialize_value(s, node->arg1.values);
-            jl_serialize_value(s, jl_nothing);
-            jl_serialize_value(s, node->targ.values);
+                offsetof(jl_typemap_level_t, targ) == 1 * sizeof(jl_value_t*) &&
+                offsetof(jl_typemap_level_t, linear) == 2 * sizeof(jl_value_t*) &&
+                offsetof(jl_typemap_level_t, any) == 3 * sizeof(jl_value_t*) &&
+                offsetof(jl_typemap_level_t, key) == 4 * sizeof(jl_value_t*) &&
+                sizeof(jl_typemap_level_t) == 5 * sizeof(jl_value_t*));
+            jl_serialize_value(s, node->arg1);
+            jl_serialize_value(s, node->targ);
             jl_serialize_value(s, node->linear);
             jl_serialize_value(s, node->any);
             jl_serialize_value(s, node->key);
@@ -1456,7 +1454,6 @@ static jl_value_t *jl_deserialize_datatype(jl_serializer_state *s, int pos, jl_v
         dt->ninitialized = read_uint16(s->s);
     else
         dt->ninitialized = 0;
-    dt->uid = 0;
     dt->hash = read_int32(s->s);
 
     if (has_layout) {
@@ -1490,14 +1487,10 @@ static jl_value_t *jl_deserialize_datatype(jl_serializer_state *s, int pos, jl_v
         }
     }
 
-    if (tag == 5) {
-        dt->uid = jl_assign_type_uid();
-    }
-    else if (tag == 10 || tag == 11 || tag == 12) {
+    if (tag == 10 || tag == 11 || tag == 12) {
         assert(pos > 0);
         arraylist_push(&flagref_list, loc == HT_NOTFOUND ? NULL : loc);
         arraylist_push(&flagref_list, (void*)(uintptr_t)pos);
-        dt->uid = -1; // mark that this type needs a new uid
         ptrhash_put(&uniquing_table, dt, NULL);
     }
 
@@ -3000,20 +2993,13 @@ static jl_datatype_t *jl_recache_type(jl_datatype_t *dt) JL_GC_DISABLED
     }
 
     // then recache the type itself
-    assert(dt->uid == -1);
     assert(is_cacheable(dt));
     if (jl_svec_len(tt) == 0) { // jl_cache_type doesn't work if length(parameters) == 0
-        if (!jl_is_abstracttype((jl_value_t*)dt))
-            dt->uid = jl_assign_type_uid();
         t = dt;
     }
     else {
         t = jl_lookup_cache_type_(dt);
         if (t == NULL) {
-            if (!jl_is_abstracttype((jl_value_t*)dt))
-                dt->uid = jl_assign_type_uid();
-            else
-                dt->uid = 0;
             jl_cache_type_(dt);
             t = dt;
         }
