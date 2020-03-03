@@ -2098,3 +2098,8 @@ end
 # issue #34673
 # check that :toplevel still returns a value when nested inside something else
 @test eval(Expr(:block, 0, Expr(:toplevel, 43))) == 43
+
+@test_throws LoadError("string", 2, ErrorException("syntax: invalid UTF-8 character")) include_string(@__MODULE__,
+                                      "x = 1\n# Halloa\xf5b\ny = 2")
+@test_throws LoadError include_string(@__MODULE__,
+                                      "x\xf5 = 1\n# Halloa\xf5b\ny = 2")
