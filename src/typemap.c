@@ -248,9 +248,6 @@ static jl_typemap_t *mtcache_hash_lookup(jl_svec_t *cache JL_PROPAGATES_ROOT, jl
     return *mtcache_hash_lookup_bp(cache, ty, tparam, offs);
 }
 
-// Recursively rehash a TypeMap (for example, after deserialization)
-void jl_typemap_rehash(jl_typemap_t *ml, int8_t offs) { }
-
 // ----- Sorted Type Signature Lookup Matching ----- //
 
 static int jl_typemap_array_visitor(jl_svec_t *a, jl_typemap_visitor_fptr fptr, void *closure)
