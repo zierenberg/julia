@@ -2055,7 +2055,7 @@ void jl_init_types(void) JL_GC_DISABLED
                             jl_type_type,
                             jl_any_type, // Union{Vector, Nothing}
                             jl_any_type, // Union{Vector, Nothing}
-                            jl_any_type, // TypeMap
+                            jl_simplevector_type, // TypeSet
                             jl_string_type,
                             jl_any_type,
                             jl_any_type, // jl_method_instance_type
