@@ -2181,3 +2181,10 @@ end
         @test ex == err
     end
 end
+
+# issue #34105
+let str = "   yoyo"
+    interp = """interpolate:\n$str
+    next line"""
+    @test interp == "interpolate:\n   yoyo\nnext line"
+end
