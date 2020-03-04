@@ -521,11 +521,10 @@ typedef struct _jl_typemap_entry_t {
 // indexed by key if it is a sublevel in an array
 typedef struct _jl_typemap_level_t {
     JL_DATA_TYPE
-    jl_svec_t *arg1;
-    jl_svec_t *targ;
+    jl_array_t *arg1;
+    jl_array_t *targ;
     jl_typemap_entry_t *linear; // jl_typemap_t * (but no more levels)
     jl_typemap_t *any; // type at offs is Any
-    jl_value_t *key; // [nullable]
 } jl_typemap_level_t;
 
 // contains the TypeMap for one Type
@@ -1492,6 +1491,7 @@ int jl_is_submodule(jl_module_t *child, jl_module_t *parent) JL_NOTSAFEPOINT;
 JL_DLLEXPORT jl_array_t *jl_eqtable_put(jl_array_t *h, jl_value_t *key, jl_value_t *val, int *inserted);
 JL_DLLEXPORT jl_value_t *jl_eqtable_get(jl_array_t *h, jl_value_t *key,
                                         jl_value_t *deflt);
+jl_value_t **jl_table_peek_bp(jl_array_t *a, jl_value_t *key);
 
 // system information
 JL_DLLEXPORT int jl_errno(void);

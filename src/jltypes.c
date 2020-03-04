@@ -1842,14 +1842,12 @@ void jl_init_types(void) JL_GC_DISABLED
 
     jl_typemap_level_type =
         jl_new_datatype(jl_symbol("TypeMapLevel"), core, jl_any_type, jl_emptysvec,
-                        jl_perm_symsvec(5,
+                        jl_perm_symsvec(4,
                             "arg1",
                             "targ",
                             "list",
-                            "any",
-                            "key"),
-                        jl_svec(5,
-                            jl_any_type,
+                            "any"),
+                        jl_svec(4,
                             jl_any_type,
                             jl_any_type,
                             jl_any_type,

@@ -1063,13 +1063,11 @@ static void jl_serialize_value_(jl_serializer_state *s, jl_value_t *v, int as_li
                 offsetof(jl_typemap_level_t, targ) == 1 * sizeof(jl_value_t*) &&
                 offsetof(jl_typemap_level_t, linear) == 2 * sizeof(jl_value_t*) &&
                 offsetof(jl_typemap_level_t, any) == 3 * sizeof(jl_value_t*) &&
-                offsetof(jl_typemap_level_t, key) == 4 * sizeof(jl_value_t*) &&
-                sizeof(jl_typemap_level_t) == 5 * sizeof(jl_value_t*));
+                sizeof(jl_typemap_level_t) == 4 * sizeof(jl_value_t*));
             jl_serialize_value(s, node->arg1);
             jl_serialize_value(s, node->targ);
             jl_serialize_value(s, node->linear);
             jl_serialize_value(s, node->any);
-            jl_serialize_value(s, node->key);
             return;
         }
 
@@ -3297,7 +3295,7 @@ void jl_init_serializer(void)
 
     void *vals[] = { jl_emptysvec, jl_emptytuple, jl_false, jl_true, jl_nothing, jl_any_type,
                      call_sym, invoke_sym, goto_ifnot_sym, return_sym, jl_symbol("tuple"),
-                     unreachable_sym, jl_an_empty_string,
+                     unreachable_sym, jl_an_empty_string, jl_an_empty_vec_any,
 
                      // empirical list of very common symbols
                      #include "common_symbols1.inc"

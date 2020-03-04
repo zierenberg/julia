@@ -70,7 +70,9 @@ static void *const _tags[] = {
          &jl_segv_exception,
 #endif
          // other special values
-         &jl_emptysvec, &jl_emptytuple, &jl_false, &jl_true, &jl_nothing, &jl_an_empty_string,
+         &jl_emptysvec, &jl_emptytuple, &jl_false, &jl_true, &jl_nothing,
+         &jl_an_empty_string, &jl_an_empty_vec_any,
+
          &jl_module_init_order, &jl_core_module, &jl_base_module, &jl_main_module, &jl_top_module,
          &jl_typeinf_func, &jl_type_type_mt, &jl_nonfunction_mt,
          // some Core.Builtin Functions that we want to be able to reference:
