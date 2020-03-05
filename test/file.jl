@@ -1297,7 +1297,7 @@ cd(dirwalk) do
 
         @test_throws Base.IOError walkdir(joinpath(".", "sub_dir3"); follow_symlinks=true)
         root, dirs, files = take!(walkdir(joinpath(".", "sub_dir3"); follow_symlinks=false))
-        @rest root == joinpath(".", "sub_dir3")
+        @test root == joinpath(".", "sub_dir3")
         @test dirs == []
         @test files == ["foo"]
     end
