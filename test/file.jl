@@ -1256,8 +1256,18 @@ cd(dirwalk) do
             root, dirs, files = take!(chnl)
         end
         @test root == joinpath(".", "sub_dir1")
-        @test dirs ==  (has_symlinks ? ["link", "subsub_dir1", "subsub_dir2"] : ["subsub_dir1", "subsub_dir2"])
-        @test files == ["file1", "file2"]
+        if has_symlinks
+            if follow_symlinks
+                @test dirs ==  ["link", "subsub_dir1", "subsub_dir2"]
+                @test files == ["file1", "file2"]
+            else
+                @test dirs ==  ["subsub_dir1", "subsub_dir2"]
+                @test files == ["file1", "file2", "link"]
+            end
+        else
+            @test dirs ==  ["subsub_dir1", "subsub_dir2"]
+            @test files == ["file1", "file2"]
+        end
 
         root, dirs, files = take!(chnl)
         @test root == joinpath(".", "sub_dir2")
